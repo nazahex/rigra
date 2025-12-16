@@ -1,0 +1,50 @@
+# Rust
+target/
+
+# Output directories
+dist
+bin
+.output
+.artifacts
+.tsbuildinfo
+
+# Environment
+.env
+.env*.local
+
+# JavaScript Dependencies
+node_modules/
+
+# Package manager lock files
+Cargo.lock
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+bun.lock
+bun.lockb
+shrinkwrap.yaml
+nx.json
+npm-shrinkwrap.json
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+*.launch
+.settings/
+
+# System Files
+.DS_Store
+Thumbs.db
+
+# Temporary
+.turbo/
+
+.temp/
+temp/
+*.tmp
+*.temp
+
+# Wakatime
+.wakatime-project
+
