@@ -19,8 +19,8 @@
 
 use crate::models::index::Index;
 use crate::models::policy::{LineBreakRule, Policy};
-use serde_json::{Map, Value as Json};
 use rayon::prelude::*;
+use serde_json::{Map, Value as Json};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -87,11 +87,25 @@ pub fn run_format(
             .map(|path| {
                 let data = match fs::read_to_string(path) {
                     Ok(s) => s,
-                    Err(_) => return FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: None },
+                    Err(_) => {
+                        return FormatResult {
+                            file: path.to_string_lossy().to_string(),
+                            changed: false,
+                            preview: None,
+                            original: None,
+                        }
+                    }
                 };
                 let mut json: Json = match serde_json::from_str(&data) {
                     Ok(v) => v,
-                    Err(_) => return FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: None },
+                    Err(_) => {
+                        return FormatResult {
+                            file: path.to_string_lossy().to_string(),
+                            changed: false,
+                            preview: None,
+                            original: None,
+                        }
+                    }
                 };
                 if let Some(ord) = ord_opt.as_ref() {
                     let changed = apply_order_from(&mut json, &ord.top, &ord.sub);
@@ -124,16 +138,36 @@ pub fn run_format(
                         }
                         if write {
                             let _ = fs::write(path, s.clone());
-                            return FormatResult { file: path.to_string_lossy().to_string(), changed: true, preview: None, original: if capture_old { Some(data) } else { None } };
+                            return FormatResult {
+                                file: path.to_string_lossy().to_string(),
+                                changed: true,
+                                preview: None,
+                                original: if capture_old { Some(data) } else { None },
+                            };
                         } else {
-                            return FormatResult { file: path.to_string_lossy().to_string(), changed: true, preview: Some(s), original: if capture_old { Some(data) } else { None } };
+                            return FormatResult {
+                                file: path.to_string_lossy().to_string(),
+                                changed: true,
+                                preview: Some(s),
+                                original: if capture_old { Some(data) } else { None },
+                            };
                         }
                     } else {
-                        return FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: if capture_old { Some(data) } else { None } };
+                        return FormatResult {
+                            file: path.to_string_lossy().to_string(),
+                            changed: false,
+                            preview: None,
+                            original: if capture_old { Some(data) } else { None },
+                        };
                     }
                 }
                 // No order applies
-                FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: if capture_old { Some(data) } else { None } }
+                FormatResult {
+                    file: path.to_string_lossy().to_string(),
+                    changed: false,
+                    preview: None,
+                    original: if capture_old { Some(data) } else { None },
+                }
             })
             .collect();
 
