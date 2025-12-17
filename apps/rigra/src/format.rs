@@ -20,6 +20,7 @@
 use crate::models::index::Index;
 use crate::models::policy::{LineBreakRule, Policy};
 use serde_json::{Map, Value as Json};
+use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
@@ -66,29 +67,35 @@ pub fn run_format(
         let policy: Option<Policy> = fs::read_to_string(&pol_path)
             .ok()
             .and_then(|s| toml::from_str::<Policy>(&s).ok());
+
+        // Collect all target files for this rule
         let mut targets: Vec<PathBuf> = Vec::new();
         for pat in ri.patterns.iter() {
             let abs_glob = root.join(pat);
             let pattern = abs_glob.to_string_lossy().to_string();
             for entry in glob::glob(&pattern).expect("bad glob pattern") {
-                if let Ok(p) = entry {
-                    targets.push(p);
+                if let Ok(path) = entry {
+                    targets.push(path);
                 }
             }
         }
-        for path in targets {
-            let data = match fs::read_to_string(&path) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let mut json: Json = match serde_json::from_str(&data) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if let Some(ord) = policy.as_ref().and_then(|p| p.order.as_ref()) {
-                let changed = apply_order_from(&mut json, &ord.top, &ord.sub);
-                if changed {
-                    if write {
+
+        // Process targets in parallel for throughput; gather deterministic order by file path
+        let ord_opt = policy.as_ref().and_then(|p| p.order.as_ref()).cloned();
+        let rule_results: Vec<FormatResult> = targets
+            .par_iter()
+            .map(|path| {
+                let data = match fs::read_to_string(path) {
+                    Ok(s) => s,
+                    Err(_) => return FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: None },
+                };
+                let mut json: Json = match serde_json::from_str(&data) {
+                    Ok(v) => v,
+                    Err(_) => return FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: None },
+                };
+                if let Some(ord) = ord_opt.as_ref() {
+                    let changed = apply_order_from(&mut json, &ord.top, &ord.sub);
+                    if changed {
                         let mut s = serde_json::to_string_pretty(&json).unwrap();
                         if strict_linebreak {
                             let between = lb_between_groups_override
@@ -115,69 +122,24 @@ pub fn run_format(
                             let keep_map = compute_in_field_keep_map(&data, &in_fields);
                             s = apply_in_field_linebreaks(s, &in_fields, &keep_map);
                         }
-                        let _ = fs::write(&path, s.clone());
-                        results.push(FormatResult {
-                            file: path.to_string_lossy().to_string(),
-                            changed: true,
-                            preview: None,
-                            original: if capture_old {
-                                Some(data.clone())
-                            } else {
-                                None
-                            },
-                        });
-                    } else {
-                        let mut s = serde_json::to_string_pretty(&json).unwrap();
-                        if strict_linebreak {
-                            let between = lb_between_groups_override
-                                .or(policy
-                                    .as_ref()
-                                    .and_then(|p| p.linebreak.as_ref())
-                                    .and_then(|lb| lb.between_groups))
-                                .unwrap_or(false);
-                            let fields = merge_linebreak_fields(
-                                policy
-                                    .as_ref()
-                                    .and_then(|p| p.linebreak.as_ref())
-                                    .map(|lb| &lb.before_fields),
-                                lb_before_fields_override,
-                            );
-                            let in_fields = merge_linebreak_fields(
-                                policy
-                                    .as_ref()
-                                    .and_then(|p| p.linebreak.as_ref())
-                                    .map(|lb| &lb.in_fields),
-                                lb_in_fields_override,
-                            );
-                            s = apply_linebreaks(s, &ord.top, between, &fields);
-                            let keep_map = compute_in_field_keep_map(&data, &in_fields);
-                            s = apply_in_field_linebreaks(s, &in_fields, &keep_map);
-                        }
-                        results.push(FormatResult {
-                            file: path.to_string_lossy().to_string(),
-                            changed: true,
-                            preview: Some(s),
-                            original: if capture_old {
-                                Some(data.clone())
-                            } else {
-                                None
-                            },
-                        });
-                    }
-                } else {
-                    results.push(FormatResult {
-                        file: path.to_string_lossy().to_string(),
-                        changed: false,
-                        preview: None,
-                        original: if capture_old {
-                            Some(data.clone())
+                        if write {
+                            let _ = fs::write(path, s.clone());
+                            return FormatResult { file: path.to_string_lossy().to_string(), changed: true, preview: None, original: if capture_old { Some(data) } else { None } };
                         } else {
-                            None
-                        },
-                    });
+                            return FormatResult { file: path.to_string_lossy().to_string(), changed: true, preview: Some(s), original: if capture_old { Some(data) } else { None } };
+                        }
+                    } else {
+                        return FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: if capture_old { Some(data) } else { None } };
+                    }
                 }
-            }
-        }
+                // No order applies
+                FormatResult { file: path.to_string_lossy().to_string(), changed: false, preview: None, original: if capture_old { Some(data) } else { None } }
+            })
+            .collect();
+
+        let mut rule_results = rule_results;
+        rule_results.sort_by(|a, b| a.file.cmp(&b.file));
+        results.extend(rule_results);
     }
     results
 }
@@ -327,10 +289,10 @@ fn apply_linebreaks(
     if !between_groups || groups.is_empty() {
         return pretty;
     }
-    let mut group_first_keys: Vec<String> = Vec::new();
+    let mut group_first_keys: HashSet<String> = HashSet::new();
     for grp in groups.iter() {
         if let Some(first) = grp.first() {
-            group_first_keys.push(first.clone());
+            group_first_keys.insert(first.clone());
         }
     }
     let mut out: Vec<String> = Vec::new();
@@ -343,7 +305,7 @@ fn apply_linebreaks(
                 let rest = &trimmed[pos + 1..];
                 if let Some(end) = rest.find('"') {
                     let key = &rest[..end];
-                    if group_first_keys.iter().any(|k| k == key) {
+                    if group_first_keys.contains(key) {
                         if seen_first {
                             match field_rules.get(key).copied() {
                                 Some(LineBreakRule::None) => {
