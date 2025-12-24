@@ -10,6 +10,7 @@ use crate::models::{Issue, LintResult, Summary};
 use glob::glob;
 use rayon::prelude::*;
 use serde_json::Value as Json;
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -20,7 +21,11 @@ use std::path::PathBuf;
 ///
 /// Severity accounting contributes to the final summary; `level = "error"`
 /// affects the error count and typical CI exit behavior upstream.
-pub fn run_lint(repo_root: &str, index_path: &str) -> LintResult {
+pub fn run_lint(
+    repo_root: &str,
+    index_path: &str,
+    patterns_override: &std::collections::HashMap<String, Vec<String>>,
+) -> LintResult {
     let root = PathBuf::from(repo_root);
     let idx_path = root.join(index_path);
     let idx_str = match fs::read_to_string(&idx_path) {
@@ -70,8 +75,18 @@ pub fn run_lint(repo_root: &str, index_path: &str) -> LintResult {
     let mut issues: Vec<Issue> = Vec::new();
     let mut files_count: usize = 0;
 
+    // Cache policies across rules by path to avoid repeated I/O and parse when shared
+    let mut policy_cache: HashMap<PathBuf, Policy> = HashMap::new();
     for ri in index.rules {
-        lint_rule(&root, &idx_path, ri, &mut issues, &mut files_count);
+        lint_rule(
+            &root,
+            &idx_path,
+            ri,
+            &mut issues,
+            &mut files_count,
+            &mut policy_cache,
+            patterns_override,
+        );
     }
 
     let mut errs = 0usize;
@@ -102,41 +117,55 @@ fn lint_rule(
     ri: RuleIndex,
     issues: &mut Vec<Issue>,
     files_count: &mut usize,
+    policy_cache: &mut HashMap<PathBuf, Policy>,
+    patterns_override: &std::collections::HashMap<String, Vec<String>>,
 ) {
     let pol_path = idx_path.parent().unwrap().join(&ri.policy);
-    let pol_str = match fs::read_to_string(&pol_path) {
-        Ok(s) => s,
-        Err(_) => {
-            issues.push(Issue {
-                file: pol_path.to_string_lossy().to_string(),
-                rule: ri.id.clone(),
-                severity: "error".into(),
-                path: "$".into(),
-                message: format!(
-                    "Policy file not found for rule '{}': {}",
-                    ri.id,
-                    pol_path.to_string_lossy()
-                ),
-            });
-            return;
-        }
-    };
-    let policy: Policy = match toml::from_str(&pol_str) {
-        Ok(p) => p,
-        Err(_) => {
-            issues.push(Issue {
-                file: pol_path.to_string_lossy().to_string(),
-                rule: ri.id.clone(),
-                severity: "error".into(),
-                path: "$".into(),
-                message: "Policy file is not valid TOML".into(),
-            });
-            return;
+    let policy: &Policy = if let Some(p) = policy_cache.get(&pol_path) {
+        p
+    } else {
+        let pol_str = match fs::read_to_string(&pol_path) {
+            Ok(s) => s,
+            Err(_) => {
+                issues.push(Issue {
+                    file: pol_path.to_string_lossy().to_string(),
+                    rule: ri.id.clone(),
+                    severity: "error".into(),
+                    path: "$".into(),
+                    message: format!(
+                        "Policy file not found for rule '{}': {}",
+                        ri.id,
+                        pol_path.to_string_lossy()
+                    ),
+                });
+                return;
+            }
+        };
+        match toml::from_str::<Policy>(&pol_str) {
+            Ok(p) => {
+                policy_cache.insert(pol_path.clone(), p);
+                policy_cache.get(&pol_path).unwrap()
+            }
+            Err(_) => {
+                issues.push(Issue {
+                    file: pol_path.to_string_lossy().to_string(),
+                    rule: ri.id.clone(),
+                    severity: "error".into(),
+                    path: "$".into(),
+                    message: "Policy file is not valid TOML".into(),
+                });
+                return;
+            }
         }
     };
 
+    // Choose patterns: override from rigra.toml if available, otherwise index defaults
+    let use_patterns: Vec<String> = patterns_override
+        .get(&ri.id)
+        .cloned()
+        .unwrap_or_else(|| ri.patterns.clone());
     let mut targets: Vec<PathBuf> = Vec::new();
-    for pat in ri.patterns.iter() {
+    for pat in use_patterns.iter() {
         let abs_glob = root.join(pat);
         let pattern = abs_glob.to_string_lossy().to_string();
         for entry in glob(&pattern).expect("bad glob pattern") {
@@ -166,7 +195,7 @@ fn lint_rule(
                     let mut expected: Vec<String> = Vec::new();
                     for group in &ord.top {
                         for key in group {
-                            if obj.contains_key(key) {
+                            if obj.contains_key(key.as_str()) {
                                 expected.push(key.clone());
                             }
                         }
