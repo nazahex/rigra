@@ -119,6 +119,19 @@ pub fn print_format(results: &[FormatResult], output: &str, write: bool, diff: b
         }
         _ => {
             let color = use_colors(output);
+            let changed_count = results.iter().filter(|r| r.changed).count();
+            if changed_count == 0 {
+                if color {
+                    println!(
+                        "{} {}",
+                        "✔ ⟦stable⟧".blue().bold(),
+                        "Everything is tidy. No changes to format."
+                    );
+                } else {
+                    println!("✔ ⟦stable⟧ Everything is tidy. No changes.");
+                }
+                return;
+            }
             for r in results {
                 if write {
                     if r.changed {
@@ -151,12 +164,6 @@ pub fn print_format(results: &[FormatResult], output: &str, write: bool, diff: b
                         } else {
                             println!("--- {}\n{}", r.file, prev);
                         }
-                    }
-                } else {
-                    if color {
-                        println!("{} {}", "no changes:".bright_black().to_string(), r.file);
-                    } else {
-                        println!("no changes: {}", r.file);
                     }
                 }
             }
