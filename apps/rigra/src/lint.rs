@@ -6,7 +6,9 @@
 use crate::checks::run_checks;
 use crate::models::index::{Index, RuleIndex};
 use crate::models::policy::Policy;
+use crate::models::sync_policy::SyncPolicy;
 use crate::models::{Issue, LintResult, Summary};
+use crate::sync;
 use glob::glob;
 use rayon::prelude::*;
 use serde_json::Value as Json;
@@ -24,6 +26,7 @@ use std::path::PathBuf;
 pub fn run_lint(
     repo_root: &str,
     index_path: &str,
+    scope: &str,
     patterns_override: &std::collections::HashMap<String, Vec<String>>,
 ) -> LintResult {
     let root = PathBuf::from(repo_root);
@@ -89,6 +92,66 @@ pub fn run_lint(
         );
     }
 
+    // Evaluate sync status into lint using external policy
+    if let Some(sync_ref) = index.sync_ref.as_ref() {
+        let pol_path = idx_path.parent().unwrap().join(sync_ref);
+        if let Ok(pol_str) = fs::read_to_string(&pol_path) {
+            if let Ok(policy) = toml::from_str::<SyncPolicy>(&pol_str) {
+                let defaults = policy.lint.unwrap_or_default();
+                for rule in policy.sync {
+                    if !is_rule_enabled(&rule.when, scope) {
+                        continue;
+                    }
+                    // src resolved relative to index
+                    let src = idx_path.parent().unwrap().join(&rule.source);
+                    // apply client target override
+                    let client_cfg = crate::config::load_config(&root).unwrap_or_default();
+                    let dst_target = client_cfg
+                        .sync
+                        .as_ref()
+                        .and_then(|s| s.config.as_ref())
+                        .and_then(|m| m.get(&rule.id))
+                        .and_then(|c| c.target.clone())
+                        .unwrap_or_else(|| rule.target.clone());
+                    let dst = root.join(&dst_target);
+                    let (_w, would_write) = sync::apply_sync(
+                        &root,
+                        &rule,
+                        &src,
+                        &dst,
+                        client_cfg
+                            .sync
+                            .as_ref()
+                            .and_then(|s| s.config.as_ref())
+                            .and_then(|m| m.get(&rule.id)),
+                        false,
+                    );
+                    if would_write {
+                        let sev = rule
+                            .level
+                            .clone()
+                            .or(defaults.level.clone())
+                            .unwrap_or_else(|| "info".to_string());
+                        let msg = rule
+                            .message
+                            .clone()
+                            .or(defaults.message.clone())
+                            .unwrap_or_else(|| {
+                                "Not synced yet. Please run rigra sync.".to_string()
+                            });
+                        issues.push(Issue {
+                            file: dst.to_string_lossy().to_string(),
+                            rule: format!("sync:{}", rule.id),
+                            severity: sev,
+                            path: "$".into(),
+                            message: msg,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     let mut errs = 0usize;
     let mut warns = 0usize;
     let mut infos = 0usize;
@@ -108,6 +171,15 @@ pub fn run_lint(
             files: files_count,
         },
     }
+}
+fn is_rule_enabled(when: &str, scope: &str) -> bool {
+    let w = when.trim();
+    if w.is_empty() || w == "*" || w.eq_ignore_ascii_case("any") || w.eq_ignore_ascii_case("all") {
+        return true;
+    }
+    w.split(|c| c == ',' || c == '|')
+        .map(|s| s.trim())
+        .any(|tok| !tok.is_empty() && tok.eq_ignore_ascii_case(scope))
 }
 
 /// Lint a single indexed rule against its targets, collecting issues.
