@@ -26,6 +26,7 @@ pub struct SyncRule {
     pub source: String,
     pub target: String,
     pub when: String,
+    /// Optional format type for structured files: json|yaml|toml
     #[serde(default)]
-    pub overwrite: bool,
+    pub format: Option<String>,
 }
