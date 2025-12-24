@@ -157,14 +157,15 @@ pub fn print_sync(actions: &[SyncAction], output: &str) {
                         "rule": a.rule_id,
                         "source": a.source,
                         "target": a.target,
+                        "format": a.format,
                         "wrote": a.wrote,
-                        "skipped": a.skipped,
+                        "wouldWrite": a.would_write,
                     })
                 })
                 .collect();
             let summary = json!({
                 "wrote": actions.iter().filter(|a| a.wrote).count(),
-                "skipped": actions.iter().filter(|a| a.skipped).count(),
+                "wouldWrite": actions.iter().filter(|a| a.would_write && !a.wrote).count(),
                 "total": actions.len(),
             });
             let out = json!({"results": items, "summary": summary});
@@ -172,35 +173,72 @@ pub fn print_sync(actions: &[SyncAction], output: &str) {
         }
         _ => {
             let color = use_colors(output);
-            for a in actions {
-                if a.skipped {
+            // Helper to shorten long convention cache paths
+            let shorten = |p: &str| -> String {
+                if let Some(pos) = p.find("/.rigra/conv/") {
+                    // extract cachekey and trailing subpath
+                    let rest = &p[pos + "/.rigra/conv/".len()..];
+                    let mut parts = rest.splitn(2, '/');
+                    let cache = parts.next().unwrap_or(rest);
+                    let tail = parts.next().unwrap_or("");
                     if color {
-                        println!(
-                            "{} {} -> {} (rule={})",
-                            "⏭️  skipped (exists):".yellow().bold(),
-                            a.source,
-                            a.target,
-                            a.rule_id
-                        );
+                        format!(
+                            "{}{}",
+                            format!("conv:{}", cache).magenta().bold(),
+                            if tail.is_empty() {
+                                String::new()
+                            } else {
+                                format!("/{}", tail)
+                            }
+                        )
                     } else {
-                        println!(
-                            "⏭️  skipped (exists): {} -> {} (rule={})",
-                            a.source, a.target, a.rule_id
-                        );
+                        format!(
+                            "conv:{}{}",
+                            cache,
+                            if tail.is_empty() {
+                                String::new()
+                            } else {
+                                format!("/{}", tail)
+                            }
+                        )
                     }
-                } else if a.wrote {
+                } else {
+                    p.to_string()
+                }
+            };
+            for a in actions {
+                if a.wrote {
                     if color {
                         println!(
                             "{} {} -> {} (rule={})",
                             "📥 synced:".green().bold(),
-                            a.source,
+                            shorten(&a.source),
                             a.target,
                             a.rule_id
                         );
                     } else {
                         println!(
                             "📥 synced: {} -> {} (rule={})",
-                            a.source, a.target, a.rule_id
+                            shorten(&a.source),
+                            a.target,
+                            a.rule_id
+                        );
+                    }
+                } else if a.would_write {
+                    if color {
+                        println!(
+                            "{} {} -> {} (rule={})",
+                            "↻ would sync:".cyan().bold(),
+                            shorten(&a.source),
+                            a.target,
+                            a.rule_id
+                        );
+                    } else {
+                        println!(
+                            "↻ would sync: {} -> {} (rule={})",
+                            shorten(&a.source),
+                            a.target,
+                            a.rule_id
                         );
                     }
                 }
