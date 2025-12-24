@@ -46,6 +46,8 @@ pub struct RigletConfig {
     pub rules: Option<std::collections::HashMap<String, RulePatternOverride>>, // [rules.<id>].patterns
     #[serde(default)]
     pub conv: Option<ConvCfg>,
+    #[serde(default)]
+    pub sync: Option<SyncCfg>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +83,43 @@ pub struct ConvCfg {
     pub source: Option<String>,
     /// Optional default subpath inside archive (defaults to "index.toml")
     pub subpath: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SyncCfg {
+    #[serde(default)]
+    pub config: Option<std::collections::HashMap<String, SyncClientCfg>>, // [sync.config.<id>]
+    #[serde(default)]
+    pub hooks: Option<SyncHooks>, // [sync.hooks.post]
+    /// Default write behavior for `rigra sync` when CLI flags are absent
+    pub write: Option<bool>,
+    /// Ignore specific sync IDs entirely
+    #[serde(default)]
+    pub ignore: Option<Vec<String>>, // [sync].ignore = ["id1","id2"]
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SyncHooks {
+    #[serde(default)]
+    pub post: Option<std::collections::HashMap<String, Vec<String>>>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SyncClientCfg {
+    pub target: Option<String>,
+    pub merge: Option<SyncClientMergeCfg>,
+}
+
+#[derive(Debug, Default, Deserialize, Clone)]
+pub struct SyncClientMergeCfg {
+    #[serde(default, rename = "keep")]
+    pub keep_paths: Vec<String>,
+    #[serde(default, rename = "override")]
+    pub override_paths: Vec<String>,
+    #[serde(default, rename = "noSync")]
+    pub nosync_paths: Vec<String>,
+    #[serde(default)]
+    pub array: Option<std::collections::HashMap<String, String>>, // path -> union|replace
 }
 
 /// Walk upward from `start` to detect the repository root.
