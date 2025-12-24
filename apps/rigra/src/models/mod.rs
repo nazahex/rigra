@@ -2,6 +2,7 @@
 
 pub mod index;
 pub mod policy;
+pub mod sync_policy;
 
 use serde::Serialize;
 
