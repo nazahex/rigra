@@ -64,43 +64,56 @@ pub enum Check {
     Required {
         fields: Vec<String>,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
     #[serde(rename = "type")]
     Type {
         #[serde(default)]
-        name: Option<String>,
-        #[serde(default)]
-        version: Option<String>,
+        /// Map of JSON paths to expected kinds (string|number|integer|boolean|array|object|null)
+        fields: HashMap<String, String>,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
     #[serde(rename = "const")]
     Const {
         field: String,
         value: Json,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
     #[serde(rename = "pattern")]
     Pattern {
         field: String,
         regex: String,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
     #[serde(rename = "enum")]
     Enum {
         field: String,
         values: Vec<Json>,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
     #[serde(rename = "minLength")]
     MinLength {
         field: String,
         min: usize,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
     #[serde(rename = "maxLength")]
     MaxLength {
         field: String,
         max: usize,
         message: Option<String>,
+        #[serde(default)]
+        level: Option<String>,
     },
 }
