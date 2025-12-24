@@ -204,16 +204,28 @@ fn main() {
             scope,
             output,
             index,
+            write,
+            dry_run,
+            check,
         } => {
             let eff = config::resolve_effective(
                 repo_root.as_deref(),
                 index.as_deref(),
                 scope.as_deref(),
                 output.as_deref(),
-                None,
-                None,
-                None,
+                Some(write),
+                Some(dry_run),
+                Some(check),
             );
+            // Require index to be configured and point to a file
+            if !eff.index_configured {
+                eprintln!(
+                    "{} {}",
+                    "❌ error:".red().bold(),
+                    "Index is not configured. Pass --index or add rigra.{toml,yaml}."
+                );
+                std::process::exit(2);
+            }
             if config::load_config(&eff.repo_root).is_none() {
                 eprintln!(
                     "{} {}",
@@ -222,7 +234,7 @@ fn main() {
                 );
             }
             let idx_path = eff.repo_root.join(&eff.index);
-            if !idx_path.exists() {
+            if !idx_path.exists() || !idx_path.is_file() {
                 eprintln!(
                     "{} {}",
                     "❌ error:".red().bold(),
@@ -233,8 +245,27 @@ fn main() {
                 );
                 std::process::exit(2);
             }
-            let actions = sync::run_sync(eff.repo_root.to_str().unwrap(), &eff.index, &eff.scope);
+            let eff_diff = eff.diff;
+            let eff_check = eff.check;
+            // Default write from config: [sync].write acts as ergonomics fallback
+            let cfg_sync = config::load_config(&eff.repo_root).unwrap_or_default().sync;
+            let cfg_sync_write = cfg_sync.as_ref().and_then(|s| s.write).unwrap_or(false);
+            let eff_write = if eff_diff || eff_check {
+                false
+            } else {
+                // CLI --write takes precedence; otherwise use [sync].write
+                write || cfg_sync_write
+            };
+            let actions = sync::run_sync(
+                eff.repo_root.to_str().unwrap(),
+                &eff.index,
+                &eff.scope,
+                eff_write,
+            );
             output::print_sync(&actions, &eff.output);
+            if eff_check && actions.iter().any(|a| a.wrote) {
+                std::process::exit(1);
+            }
         }
         Commands::Conv { cmd } => {
             match cmd {
