@@ -22,41 +22,61 @@ pub fn print_lint(res: &LintResult, output: &str) {
         ),
         _ => {
             let color = use_colors(output);
+            // Group by directory and print directory headers
+            use std::collections::BTreeMap;
+            use std::path::Path;
+            let mut groups: BTreeMap<String, Vec<&crate::models::Issue>> = BTreeMap::new();
             for is in &res.issues {
-                let sev = match is.severity.as_str() {
-                    "error" => {
-                        if color {
-                            "⟦error⟧".red().bold().to_string()
-                        } else {
-                            "⟦error⟧".to_string()
-                        }
-                    }
-                    "warning" | "warn" => {
-                        if color {
-                            "⟦warn⟧".yellow().bold().to_string()
-                        } else {
-                            "⟦warn⟧".to_string()
-                        }
-                    }
-                    _ => {
-                        if color {
-                            "⟦info⟧".blue().bold().to_string()
-                        } else {
-                            "⟦info⟧".to_string()
-                        }
-                    }
-                };
-                let icon = match is.severity.as_str() {
-                    "error" => "✖".red().to_string(),
-                    "warning" | "warn" => "▲".yellow().to_string(),
-                    _ => "◆".blue().to_string(),
-                };
-                let file = if color {
-                    is.file.clone().bold().to_string()
+                let dir = Path::new(&is.file)
+                    .parent()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "⌂ (root)".to_string());
+                groups.entry(dir).or_default().push(is);
+            }
+            for (dir, items) in groups {
+                if color {
+                    println!("▣ {}", dir.bold());
                 } else {
-                    is.file.clone()
-                };
-                println!("{} {} {} ❲{}❳ — {}", icon, sev, file, is.rule, is.message);
+                    println!("{}", dir);
+                }
+                for is in items {
+                    let sev = match is.severity.as_str() {
+                        "error" => {
+                            if color {
+                                "⟦error⟧".red().bold().to_string()
+                            } else {
+                                "⟦error⟧".to_string()
+                            }
+                        }
+                        "warning" | "warn" => {
+                            if color {
+                                "⟦warn⟧".yellow().bold().to_string()
+                            } else {
+                                "⟦warn⟧".to_string()
+                            }
+                        }
+                        _ => {
+                            if color {
+                                "⟦info⟧".blue().bold().to_string()
+                            } else {
+                                "⟦info⟧".to_string()
+                            }
+                        }
+                    };
+                    let icon = match is.severity.as_str() {
+                        "error" => "✖".red().to_string(),
+                        "warning" | "warn" => "▲".yellow().to_string(),
+                        _ => "◆".blue().to_string(),
+                    };
+                    // Print only the basename under the directory header
+                    let base = Path::new(&is.file)
+                        .file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_else(|| is.file.clone());
+                    let base = if color { base.bold().to_string() } else { base };
+                    println!("  {} {} {} ❲{}❳ — {}", icon, sev, base, is.rule, is.message);
+                }
             }
             let summary = format!(
                 "— Summary — errors={} warnings={} infos={} files={}",
@@ -85,9 +105,9 @@ pub fn print_format(results: &[FormatResult], output: &str, write: bool, diff: b
                 if write {
                     if r.changed {
                         if color {
-                            println!("{} {}", "✏️  formatted:".green().bold(), r.file.bold());
+                            println!("{} {}", "✎ formatted »".green().bold(), r.file.bold());
                         } else {
-                            println!("✏️  formatted: {}", r.file);
+                            println!("✎ formatted » {}", r.file);
                         }
                     }
                 } else if r.changed {
@@ -207,6 +227,70 @@ pub fn compose_lint_json(res: &LintResult) -> JsonVal {
     serde_json::to_value(res).unwrap()
 }
 
+/// Compose grouped human-readable lint lines (excluding summary) for testing.
+#[cfg(test)]
+pub fn compose_lint_grouped_lines(res: &LintResult, color: bool) -> Vec<String> {
+    use std::collections::BTreeMap;
+    use std::path::Path;
+    let mut groups: BTreeMap<String, Vec<&crate::models::Issue>> = BTreeMap::new();
+    for is in &res.issues {
+        let dir = Path::new(&is.file)
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "⌂ (root)".to_string());
+        groups.entry(dir).or_default().push(is);
+    }
+    let mut lines = Vec::new();
+    for (dir, items) in groups {
+        if color {
+            lines.push(format!("▣ {}", dir.bold()));
+        } else {
+            lines.push(dir);
+        }
+        for is in items {
+            let sev = match is.severity.as_str() {
+                "error" => {
+                    if color {
+                        "⟦error⟧".red().bold().to_string()
+                    } else {
+                        "⟦error⟧".to_string()
+                    }
+                }
+                "warning" | "warn" => {
+                    if color {
+                        "⟦warn⟧".yellow().bold().to_string()
+                    } else {
+                        "⟦warn⟧".to_string()
+                    }
+                }
+                _ => {
+                    if color {
+                        "⟦info⟧".blue().bold().to_string()
+                    } else {
+                        "⟦info⟧".to_string()
+                    }
+                }
+            };
+            let icon = match is.severity.as_str() {
+                "error" => "✖".red().to_string(),
+                "warning" | "warn" => "▲".yellow().to_string(),
+                _ => "◆".blue().to_string(),
+            };
+            let base = Path::new(&is.file)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| is.file.clone());
+            let base = if color { base.bold().to_string() } else { base };
+            lines.push(format!(
+                "  {} {} {} ❲{}❳ — {}",
+                icon, sev, base, is.rule, is.message
+            ));
+        }
+    }
+    lines
+}
+
 /// Compose format JSON object (pure) for testing/snapshot purposes.
 pub fn compose_format_json(results: &[FormatResult], write: bool, diff: bool) -> JsonVal {
     let items: Vec<_> = results
@@ -282,5 +366,55 @@ mod tests {
         let out = compose_lint_json(&res);
         assert_eq!(out["summary"]["warnings"], 1);
         assert_eq!(out["issues"][0]["path"], "$.x");
+    }
+
+    #[test]
+    fn test_compose_lint_grouped_lines_headers_and_basenames() {
+        let res = crate::models::LintResult {
+            issues: vec![
+                crate::models::Issue {
+                    file: "conventions/hyperedge/ts-base/package.json".into(),
+                    rule: "pkgjson-sub".into(),
+                    severity: "error".into(),
+                    path: "$.repository.directory".into(),
+                    message: "Field 'repository.directory' is required".into(),
+                },
+                crate::models::Issue {
+                    file: "conventions/hyperedge/ts-lib-mono/package.json".into(),
+                    rule: "pkgjson-sub".into(),
+                    severity: "error".into(),
+                    path: "$.author".into(),
+                    message: "Author must be in the format 'Name <email> (url)'".into(),
+                },
+                crate::models::Issue {
+                    file: "package.json".into(),
+                    rule: "pkgjson-root".into(),
+                    severity: "warn".into(),
+                    path: "$.name".into(),
+                    message: "Type mismatch at $.name, got string".into(),
+                },
+            ],
+            summary: crate::models::Summary {
+                errors: 2,
+                warnings: 1,
+                infos: 0,
+                files: 3,
+            },
+        };
+        let lines = compose_lint_grouped_lines(&res, false);
+        // Expect three headers (two nested dirs + '.') and three item lines
+        assert!(lines.iter().any(|l| l == "conventions/hyperedge/ts-base"));
+        assert!(lines
+            .iter()
+            .any(|l| l == "conventions/hyperedge/ts-lib-mono"));
+        assert!(lines.iter().any(|l| l == "⌂ (root)"));
+        assert!(lines.iter().any(|l| l
+            .contains(" package.json ❲pkgjson-sub❳ — Field 'repository.directory' is required")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains(" package.json ❲pkgjson-sub❳ — Author must be in the format")));
+        assert!(lines
+            .iter()
+            .any(|l| l.contains(" package.json ❲pkgjson-root❳ — Type mismatch at $.name")));
     }
 }
