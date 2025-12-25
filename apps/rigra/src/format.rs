@@ -19,6 +19,8 @@
 
 use crate::models::index::Index;
 use crate::models::policy::{LineBreakRule, Policy};
+use crate::models::RunError;
+use owo_colors::OwoColorize;
 use rayon::prelude::*;
 use serde_json::{Map, Value as Json};
 use std::collections::{HashMap, HashSet};
@@ -55,18 +57,64 @@ pub fn run_format(
     lb_before_fields_override: &std::collections::HashMap<String, String>,
     lb_in_fields_override: &std::collections::HashMap<String, String>,
     patterns_override: &std::collections::HashMap<String, Vec<String>>,
-) -> Vec<FormatResult> {
+) -> (Vec<FormatResult>, Vec<RunError>) {
     let root = PathBuf::from(repo_root);
     let idx_path = root.join(index_path);
-    let idx_str = fs::read_to_string(&idx_path).expect("failed to read index.toml");
-    let index: Index = toml::from_str(&idx_str).expect("invalid index.toml");
+    let mut errors: Vec<RunError> = Vec::new();
+    let idx_str = match fs::read_to_string(&idx_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Failed to read index: {} — {}. Pass --index or configure rigra.toml.",
+                    idx_path.to_string_lossy(),
+                    e
+                )
+            );
+            errors.push(RunError {
+                message: format!(
+                    "Failed to read index: {} — {}",
+                    idx_path.to_string_lossy(),
+                    e
+                ),
+            });
+            return (Vec::new(), errors);
+        }
+    };
+    let index: Index = match toml::from_str(&idx_str) {
+        Ok(ix) => ix,
+        Err(e) => {
+            eprintln!(
+                "{} {}",
+                "✖ ⟦error⟧".red().bold(),
+                format!(
+                    "Failed to parse index TOML: {} — {}",
+                    idx_path.to_string_lossy(),
+                    e
+                )
+            );
+            errors.push(RunError {
+                message: format!(
+                    "Failed to parse index TOML: {} — {}",
+                    idx_path.to_string_lossy(),
+                    e
+                ),
+            });
+            return (Vec::new(), errors);
+        }
+    };
 
     let mut results = Vec::new();
     // Cache policies across rules by path to avoid repeated I/O and parse when shared
     let mut policy_cache: HashMap<PathBuf, Policy> = HashMap::new();
     for ri in index.rules {
         // Load policy for this rule to discover per-target ordering rules
-        let pol_path = idx_path.parent().unwrap().join(&ri.policy);
+        let pol_path = idx_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(&ri.policy);
         let policy: Option<&Policy> = if let Some(p) = policy_cache.get(&pol_path) {
             Some(p)
         } else {
@@ -91,7 +139,27 @@ pub fn run_format(
         for pat in use_patterns.iter() {
             let abs_glob = root.join(pat);
             let pattern = abs_glob.to_string_lossy().to_string();
-            for entry in glob::glob(&pattern).expect("bad glob pattern") {
+            let itr = match glob::glob(&pattern) {
+                Ok(it) => it,
+                Err(e) => {
+                    eprintln!(
+                        "{} {}",
+                        "✖ ⟦error⟧".red().bold(),
+                        format!(
+                            "Invalid glob pattern for rule '{}': {} — {}",
+                            ri.id, pattern, e
+                        )
+                    );
+                    errors.push(RunError {
+                        message: format!(
+                            "Invalid glob pattern for rule '{}': {} — {}",
+                            ri.id, pattern, e
+                        ),
+                    });
+                    continue;
+                }
+            };
+            for entry in itr {
                 if let Ok(path) = entry {
                     targets.push(path);
                 }
@@ -128,7 +196,21 @@ pub fn run_format(
                 if let Some(ord) = ord_opt.as_ref() {
                     // Apply ordering (mutates json), then render and compare to original
                     let _ = apply_order_from(&mut json, &ord.top, &ord.sub);
-                    let mut s = serde_json::to_string_pretty(&json).unwrap();
+                    let mut s = match serde_json::to_string_pretty(&json) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            eprintln!(
+                                "{} {}",
+                                "✖ ⟦error⟧".red().bold(),
+                                format!(
+                                    "Failed to serialize JSON for '{}': {} — skipping formatting",
+                                    path.to_string_lossy(),
+                                    e
+                                )
+                            );
+                            data.clone()
+                        }
+                    };
                     if strict_linebreak {
                         let between = lb_between_groups_override
                             .or(policy
@@ -154,7 +236,17 @@ pub fn run_format(
                     let changed = s.trim_end() != data.trim_end();
                     if write {
                         if changed {
-                            let _ = fs::write(path, s.clone());
+                            if let Err(e) = fs::write(path, s.clone()) {
+                                eprintln!(
+                                    "{} {}",
+                                    "✖ ⟦error⟧".red().bold(),
+                                    format!(
+                                        "Failed to write formatted file '{}': {}",
+                                        path.to_string_lossy(),
+                                        e
+                                    )
+                                );
+                            }
                         }
                         return FormatResult {
                             file: path.to_string_lossy().to_string(),
@@ -185,7 +277,7 @@ pub fn run_format(
         rule_results.sort_by(|a, b| a.file.cmp(&b.file));
         results.extend(rule_results);
     }
-    results
+    (results, errors)
 }
 
 /// Reorder an object according to top-level groups and sub-field orders.
