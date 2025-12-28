@@ -19,6 +19,8 @@ use cli::{Cli, Commands};
 use std::fs;
 
 fn main() {
+    // Early help handling to avoid surprises; prints long help and exits
+    // Rely on Clap's auto help; no early manual printing
     let cli = Cli::parse();
     match cli.cmd {
         Commands::Version => {
